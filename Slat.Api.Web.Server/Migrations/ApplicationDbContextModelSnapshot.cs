@@ -191,6 +191,9 @@ namespace Slat.Api.Web.Server.Migrations
                     b.Property<string>("Id")
                         .HasColumnType("nvarchar(450)");
 
+                    b.Property<int>("AccessCode")
+                        .HasColumnType("int");
+
                     b.Property<DateTimeOffset>("DateCreated")
                         .HasColumnType("datetimeoffset");
 

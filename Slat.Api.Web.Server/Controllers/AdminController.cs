@@ -17,6 +17,11 @@ namespace Slat.Api.Web.Server
         /// </summary>
         private readonly ApplicationDbContext _context;
 
+        /// <summary>
+        /// The DI instance of the <see cref="ILogger{TCategoryName}"/>
+        /// </summary>
+        private readonly ILogger<AdminController> _logger;
+
         #endregion
 
         #region Controller
@@ -24,9 +29,10 @@ namespace Slat.Api.Web.Server
         /// <summary>
         /// Default controller
         /// </summary>
-        public AdminController(ApplicationDbContext context)
+        public AdminController(ApplicationDbContext context, ILogger<AdminController> logger)
         {
             _context = context;
+            _logger = logger;
         }
 
         #endregion
@@ -441,6 +447,62 @@ namespace Slat.Api.Web.Server
         /// <summary>
         /// Creates collection of students with their credentials
         /// </summary>
+        /// <param name="studentCredentials"></param>
+        /// <returns></returns>
+        [HttpPost(ApiRoutes.CreateStudent)]
+        public async Task<ApiResponse> CreateStudentAsync([FromBody] CreateStudentApiModel studentCredentials)
+        {
+            // Initialize error message
+            string errorMessage = default;
+
+            // If either email or matric number is duplicate...
+            if (await _context.Students.AnyAsync(st => st.MatricNo == studentCredentials.MatricNo || st.Email == studentCredentials.Email))
+            {
+                // Set status code
+                Response.StatusCode = (int)HttpStatusCode.BadRequest;
+
+                // Return error response
+                return new ApiResponse
+                {
+                    ErrorMessage = $"Email or matric number already exist for {studentCredentials.Email}"
+                };
+            }
+
+            try
+            {
+                // Create student
+                await _context.Students.AddRangeAsync(new StudentsDataModel
+                {
+                    Id = Guid.NewGuid().ToString(),
+                    Email = studentCredentials.Email,
+                    FirstName = studentCredentials.FirstName,
+                    LastName = studentCredentials.LastName,
+                    MatricNo = studentCredentials.MatricNo,
+                    Photo = studentCredentials.Photo
+                });
+
+                // Save changes
+                await _context.SaveChangesAsync();
+            }
+            catch (Exception ex)
+            {
+                // Set status code
+                Response.StatusCode = (int)HttpStatusCode.InternalServerError;
+
+                // Set the error message
+                errorMessage = ex.Message;
+            }
+
+            // Return the result
+            return new ApiResponse
+            {
+                ErrorMessage = errorMessage
+            };
+        }
+
+        /// <summary>
+        /// Creates collection of students with their credentials
+        /// </summary>
         /// <param name="model"></param>
         /// <returns></returns>
         [HttpPost(ApiRoutes.CreateStudents)]
@@ -448,6 +510,57 @@ namespace Slat.Api.Web.Server
         {
             // Initialize error message
             string errorMessage = default;
+
+            var newStudents = new List<CreateStudentApiModel> { };
+
+            // Initialize warning
+            var warningResult = new WarningResult
+            {
+                Warnings = new List<IssuesApiModel>
+                {
+
+                }
+            };
+
+            // For each student...
+            foreach (var student in model)
+            {
+                // If either email or matric number is duplicate...
+                if (await _context.Students.AnyAsync(st => st.MatricNo == student.MatricNo || st.Email == student.Email))
+                {
+                    // Create a warning
+                    warningResult.Warnings.Add(new IssuesApiModel
+                    {
+                        Status = (int)HttpStatusCode.Forbidden,
+                        Code = 11249,
+                        Title = "Duplicate Email or Matric Number",
+                        Detail = $"Email or matric number already exist for {student.Email}"
+                    });
+
+                    // Move to next iteration
+                    continue;
+                }
+                // Otherwise...
+                else
+                {
+                    // Add to the collection
+                    newStudents.Add(student);
+                }
+            }
+
+            // If the collection is empty
+            if (!newStudents.Any())
+            {
+                // Set the status code
+                Response.StatusCode = (int)HttpStatusCode.BadRequest;
+
+                // Return the response
+                return new ApiResponse
+                {
+                    WarningResult = warningResult,
+                    ErrorMessage = "Unable to create any record because of a bad request"
+                };
+            }
 
             try
             {
@@ -465,6 +578,7 @@ namespace Slat.Api.Web.Server
                         FirstName = credentials.FirstName,
                         LastName = credentials.LastName,
                         MatricNo = credentials.MatricNo,
+                        Photo = credentials.Photo
                     });
                 }
 
@@ -486,6 +600,7 @@ namespace Slat.Api.Web.Server
             // Return the result
             return new ApiResponse
             {
+                WarningResult = warningResult,
                 ErrorMessage = errorMessage
             };
         }
@@ -701,7 +816,6 @@ namespace Slat.Api.Web.Server
                 ErrorMessage = errorMessage
             };
         }
-
 
         /// <summary>
         /// Fetches the specified lecturer
@@ -1009,5 +1123,208 @@ namespace Slat.Api.Web.Server
                 ErrorMessage = errorMessage
             };
         }
+
+        #region Insights
+
+        /// <summary>
+        /// Retrieves the attendance record of students in higher ranking order
+        /// </summary>
+        /// <returns>TThe <see cref="ApiResponse"/> for this request</returns>
+        [HttpGet(ApiRoutes.RetrieveStudentsAttendanceRanking)]
+        public async Task<ApiResponse> RetrieveStudentsAttendanceRankingAsync()
+        {
+            // Set the error message
+            string errorMessage = default;
+
+            // Initialize result
+            var result = new List<StudentAttendanceRecordApiModel> { };
+
+            try
+            {
+                // Initialize result
+                var records = new List<StudentAttendanceRecordApiModel> { };
+
+                // Fetch attendees
+                var attendees = await _context.Attendees.ToListAsync();
+
+                // Fetch students
+                var students = await _context.Students.ToListAsync();
+
+                foreach (var student in students)
+                {
+                    records.Add(new StudentAttendanceRecordApiModel
+                    {
+                        Email = student.Email,
+                        FirstName = student.FirstName,
+                        LastName = student.LastName,
+                        MatricNo = student.MatricNo,
+                        AttendanceCount = attendees.Count(at => at.StudentId == student.Id)
+                    });
+                }
+
+                // Set the result
+                result = records.OrderByDescending(st => st.AttendanceCount).ToList();
+            }
+            catch (Exception ex)
+            {
+                // Set status code
+                Response.StatusCode = (int)HttpStatusCode.InternalServerError;
+
+                // Log the error
+                _logger.LogError(ex.Message);
+
+                // Set the error message
+                errorMessage = ex.Message;
+            }
+
+            // Return response
+            return new ApiResponse
+            {
+                Result = result,
+                ErrorMessage = errorMessage
+            };
+        }
+
+        /// <summary>
+        /// Retrieves the attendance record of courses in higher ranking order
+        /// </summary>
+        /// <returns>TThe <see cref="ApiResponse"/> for this request</returns>
+        [HttpGet(ApiRoutes.RetrieveCoursesAttendanceRanking)]
+        public async Task<ApiResponse> RetrieveCoursesAttendanceRankingAsync()
+        {
+            // Set the error message
+            string errorMessage = default;
+
+            // Initialize result
+            var result = new List<CourseAttendanceRecordApiModel> { };
+
+            try
+            {
+                // Initialize result
+                var records = new List<CourseAttendanceRecordApiModel> { };
+
+                // Fetch courses
+                var courses = await _context.Courses
+                    .Include(course => course.Lectures)
+                    .ThenInclude(lec => lec.Attendees)
+                    .ToListAsync();
+
+                foreach (var course in courses)
+                {
+                    int aCount = 0;
+
+                    foreach (var lecture in course.Lectures)
+                    {
+                        aCount += lecture.Attendees.Count(at => at.LectureId == lecture.Id);
+                    }
+
+                    records.Add(new CourseAttendanceRecordApiModel
+                    {
+                        CourseTitle = course.Title,
+                        CourseCode = course.Code,
+                        CourseUnit = course.Unit,
+                        Lectures = course.Lectures.Select(lec => new LectureAttendanceRecordApiModel
+                        {
+                            LectureTitle = lec.Title,
+                            AttendanceCount = lec.Attendees.Count(at => at.LectureId == lec.Id)
+                        }),
+                        AttendanceCount = aCount
+                    });
+                }
+
+                // Set the result
+                result = records.OrderByDescending(st => st.AttendanceCount).ToList();
+            }
+            catch (Exception ex)
+            {
+                // Set status code
+                Response.StatusCode = (int)HttpStatusCode.InternalServerError;
+
+                // Log the error
+                _logger.LogError(ex.Message);
+
+                // Set the error message
+                errorMessage = ex.Message;
+            }
+
+            // Return response
+            return new ApiResponse
+            {
+                Result = result,
+                ErrorMessage = errorMessage
+            };
+        }
+
+        /// <summary>
+        /// Retrieves the attendance record of courses in higher ranking order
+        /// </summary>
+        /// <returns>TThe <see cref="ApiResponse"/> for this request</returns>
+        [HttpGet(ApiRoutes.RetrieveLecturersAttendanceRanking)]
+        public async Task<ApiResponse> RetrieveLecturerAttendanceRankingAsync()
+        {
+            // Set the error message
+            string errorMessage = default;
+
+            // Initialize result
+            var result = new List<LecturerAttendanceRecordApiModel> { };
+
+            try
+            {
+                // Initialize result
+                var records = new List<LecturerAttendanceRecordApiModel> { };
+
+                // Fetch lecturers
+                var lecturers = await _context.Lecturers
+                    .Include(course => course.Lectures)
+                    .ThenInclude(lec => lec.Attendees)
+                    .ToListAsync();
+
+                foreach (var lecturer in lecturers)
+                {
+                    int attendanceCount = 0;
+
+                    foreach (var lecture in lecturer.Lectures)
+                    {
+                        attendanceCount += lecture.Attendees.Count(at => at.LectureId == lecture.Id);
+                    }
+
+                    records.Add(new LecturerAttendanceRecordApiModel
+                    {
+                        FirstName = lecturer.FirstName,
+                        LastName = lecturer.LastName,
+                        LecturerEmail = lecturer.Email,
+                        Lectures = lecturer.Lectures.Select(lec => new LectureAttendanceRecordApiModel
+                        {
+                            LectureTitle = lec.Title,
+                            AttendanceCount = lec.Attendees.Count(at => at.LectureId == lec.Id)
+                        }),
+                        AttendanceCount = attendanceCount
+                    });
+                }
+
+                // Set the result
+                result = records.OrderByDescending(st => st.AttendanceCount).ToList();
+            }
+            catch (Exception ex)
+            {
+                // Set status code
+                Response.StatusCode = (int)HttpStatusCode.InternalServerError;
+
+                // Log the error
+                _logger.LogError(ex.Message);
+
+                // Set the error message
+                errorMessage = ex.Message;
+            }
+
+            // Return response
+            return new ApiResponse
+            {
+                Result = result,
+                ErrorMessage = errorMessage
+            };
+        }
+
+        #endregion
     }
 }

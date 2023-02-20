@@ -5,6 +5,7 @@ using Slat.Core;
 using System.Net;
 using static Duende.IdentityServer.Models.IdentityResources;
 using System.Net.Mail;
+using Microsoft.AspNetCore.Mvc.Infrastructure;
 
 namespace Slat.Api.Web.Server
 {
@@ -636,6 +637,160 @@ namespace Slat.Api.Web.Server
             // Return response
             return new ApiResponse
             {
+                ErrorMessage = errorMessage
+            };
+        }
+
+        [HttpGet(ApiRoutes.FetchLectureAttendees)]
+        public async Task<ApiResponse> FetchLectureAttendeesAsync([FromQuery] string lectureId)
+        {
+            // Initialize error message
+            string errorMessage = default;
+
+            // If lecture id was not specified...
+            if (string.IsNullOrEmpty(lectureId))
+            {
+                // Set status code
+                Response.StatusCode = (int)HttpStatusCode.BadRequest;
+
+                // Return error response
+                return new ApiResponse
+                {
+                    ErrorMessage = "The lecture id is required"
+                };
+            }
+
+            // If we don't find a lecture...
+            if (!await _context.Lectures.AnyAsync(l => l.Id == lectureId))
+            {
+                // Set status code
+                Response.StatusCode = (int)HttpStatusCode.NotFound;
+
+                // Return error response
+                return new ApiResponse
+                {
+                    ErrorMessage = $"The specified lecture id: {lectureId} does not match an existing lecture"
+                };
+            }
+
+            // Initialize result
+            var result = new List<LectureAttendeeApiModel> { };
+
+            try
+            {
+                // Fetch attendees by lecture id
+                var attendees = await _context.Attendees
+                    .Include(at => at.Student)
+                    .Select(at => new LectureAttendeeApiModel
+                    {
+                        MatricNo = at.Student.MatricNo,
+                        Email = at.Student.Email,
+                        FirstName = at.Student.FirstName,
+                        LastName = at.Student.LastName
+                    })
+                    .ToListAsync();
+
+                // Set the result
+                result = attendees;
+            }
+            catch (Exception ex)
+            {
+                // Set status code
+                Response.StatusCode = (int)HttpStatusCode.InternalServerError;
+
+                // Log the error message
+                _logger.LogError(ex.Message);
+
+                // Set the error message
+                errorMessage = ex.Message;
+            }
+
+            // Return response
+            return new ApiResponse
+            {
+                Result = result,
+                ErrorMessage = errorMessage
+            };
+        }
+
+        /// <summary>
+        /// Retrieves attendance records for a lecturer's courses
+        /// </summary>
+        /// <param name="lecturerId">The lecturer's id</param>
+        /// <returns>The <see cref="ApiResponse"/> for this request</returns>
+        [HttpGet(ApiRoutes.FetchLecturerAttendanceRecords)]
+        public async Task<ApiResponse> FetchLecturerAttendanceRecordsAsync([FromQuery] string lecturerId)
+        {
+            // Initialize error message
+            string errorMessage = default;
+
+            // Validate lecturer
+
+            // Initialize result
+            var result = new FetchLecturerAttendanceRecordApiModel
+            {
+                Courses = new List<CoursesApiModel> { }
+            };
+
+            try
+            {
+                // Fetch all the courses, course lectures, and
+                // lecture attendees of the specified lecturer
+                var lc = await _context.LecturerCourses
+                    .Include(lc => lc.Course)
+                    .ThenInclude(course => course.Lectures)
+                    .ThenInclude(lec => lec.Attendees)
+                    .ThenInclude(at => at.Student)
+                    .Where(lec => lec.LecturerId == lecturerId)
+                    .ToListAsync();
+
+                // For each courses...
+                foreach (var item in lc)
+                {
+                    // Set the lectures
+                    var lectures = item.Course.Lectures.Select(lec => new CourseLectureApiModel()
+                    {
+                        Id = lec.Id,
+                        Title = lec.Title,
+                        Description = lec.Description,
+                        Attendees = lec.Attendees.Select(attendee => new LectureAttendeeApiModel
+                        {
+                            MatricNo = attendee.Student.MatricNo,
+                            Email = attendee.Student.Email,
+                            FirstName = attendee.Student.FirstName,
+                            LastName = attendee.Student.LastName
+                        }),
+                        DateCreated = lec.DateCreated
+                    });
+
+                    // Add the lectures and lecture attendees
+                    result.Courses.Add(new CoursesApiModel
+                    {
+                        CourseId = item.Course.Id,
+                        CourseTitle = item.Course.Title,
+                        CourseCode = item.Course.Code,
+                        CourseUnit = item.Course.Unit,
+                        CourseDescription = item.Course.Description,
+                        Lectures = lectures.OrderBy(lecture => lecture.DateCreated)
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                // Log the error
+                _logger.LogError(ex.Message);
+
+                // Set the error message
+                errorMessage = ex.Message;
+
+                // Set the status code
+                Response.StatusCode = (int)HttpStatusCode.InternalServerError;
+            }
+
+            // Return response
+            return new ApiResponse
+            {
+                Result = result,
                 ErrorMessage = errorMessage
             };
         }
