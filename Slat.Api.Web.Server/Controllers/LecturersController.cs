@@ -1,11 +1,8 @@
-﻿using Duende.IdentityServer.Extensions;
-using Microsoft.AspNetCore.Mvc;
+﻿using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Slat.Core;
 using System.Net;
-using static Duende.IdentityServer.Models.IdentityResources;
 using System.Net.Mail;
-using Microsoft.AspNetCore.Mvc.Infrastructure;
 
 namespace Slat.Api.Web.Server
 {
